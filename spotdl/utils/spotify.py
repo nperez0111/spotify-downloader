@@ -125,13 +125,15 @@ class Singleton(type):
         self.use_cache_file = use_cache_file
 
         # Create instance
+        # Note: We handle 429 (rate limit) errors in our custom _get method,
+        # so we exclude it from spotipy's status_forcelist to avoid conflicts
         self._instance = super().__call__(
             auth=auth_token,
             auth_manager=credential_manager,
-            status_forcelist=(429, 500, 502, 503, 504, 404),
-            retries=5,
-            status_retries=5,
-            backoff_factor=1.0,
+            status_forcelist=(500, 502, 503, 504),
+            retries=3,
+            status_retries=3,
+            backoff_factor=0.5,
         )
 
         # Return instance
@@ -199,17 +201,25 @@ class SpotifyClient(Spotify, metaclass=Singleton):
         while response is None:
             try:
                 response = self._internal_call("GET", url, payload, kwargs)
-            except (
-                requests.exceptions.Timeout,
-                requests.ConnectionError,
-                SpotifyException,
-            ) as exc:
+            except (requests.exceptions.Timeout, requests.ConnectionError) as exc:
                 retries -= 1
                 if retries <= 0:
                     raise exc
                 # Exponential backoff for retries (1s, 2s, 4s)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 8)  # Cap at 8 seconds
+            except SpotifyException as exc:
+                # Only retry on rate limit errors (429)
+                if exc.http_status == 429:
+                    retries -= 1
+                    if retries <= 0:
+                        raise exc
+                    # Exponential backoff for rate limit (1s, 2s, 4s, 8s)
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 8)
+                else:
+                    # For other Spotify errors, don't retry
+                    raise exc
 
         if use_cache and cache_key is not None:
             self.cache[cache_key] = response

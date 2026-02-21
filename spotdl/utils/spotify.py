@@ -10,11 +10,13 @@ spotify.Spotify.init(client_id, client_secret)
 
 import json
 import logging
+import time
 from typing import Dict, Optional
 
 import requests
 from spotipy import Spotify
 from spotipy.cache_handler import CacheFileHandler, MemoryCacheHandler
+from spotipy.exceptions import SpotifyException
 from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
 
 from spotdl.utils.config import get_cache_path, get_spotify_cache_path
@@ -127,6 +129,9 @@ class Singleton(type):
             auth=auth_token,
             auth_manager=credential_manager,
             status_forcelist=(429, 500, 502, 503, 504, 404),
+            retries=5,
+            status_retries=5,
+            backoff_factor=1.0,
         )
 
         # Return instance
@@ -190,13 +195,21 @@ class SpotifyClient(Spotify, metaclass=Singleton):
         # Wrap in a try-except and retry up to `retries` times.
         response = None
         retries = self.max_retries  # type: ignore # pylint: disable=E1101
+        backoff = 1
         while response is None:
             try:
                 response = self._internal_call("GET", url, payload, kwargs)
-            except (requests.exceptions.Timeout, requests.ConnectionError) as exc:
+            except (
+                requests.exceptions.Timeout,
+                requests.ConnectionError,
+                SpotifyException,
+            ) as exc:
                 retries -= 1
                 if retries <= 0:
                     raise exc
+                # Exponential backoff for retries (1s, 2s, 4s)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 8)  # Cap at 8 seconds
 
         if use_cache and cache_key is not None:
             self.cache[cache_key] = response

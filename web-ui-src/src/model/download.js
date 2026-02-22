@@ -221,17 +221,13 @@ export function useDownloadManager() {
     console.log('Downloading all', songs.length, 'songs')
     notifySuccess(`Added ${songs.length} songs`, 'to download queue')
 
-    // For large playlists, use batch downloading
-    if (songs.length > 20) {
-      console.log('Using batch mode for large playlist')
-      downloadBatch(songs)
-    } else {
-      // For small playlists, use sequential downloading
-      for (const song of songs) {
-        queue(song, false)
-      }
-      processBatchDownload()
+    // Queue all songs to the frontend
+    for (const song of songs) {
+      progressTracker.appendSong(song)
     }
+    
+    // Start downloads sequentially - backend semaphore limits concurrent downloads
+    startSequentialDownloads(songs)
   }
 
   async function downloadBatch(songs) {
@@ -239,20 +235,28 @@ export function useDownloadManager() {
     // Large playlists are split into batches of batchSize items.
     isProcessingBatch.value = true
     try {
-      const urls = songs.map(s => s.url)
+      // First, add all songs to the frontend queue so they're visible in the UI
+      console.log('Adding songs to frontend queue:', songs.length)
+      for (const song of songs) {
+        progressTracker.appendSong(song)
+      }
       
-      // Queue all songs
+      const urls = songs.map(s => s.url)
+      console.log('Queueing on backend:', urls.length, 'songs')
+      
+      // Queue all songs on the backend
       const queueRes = await API.queueBatchDownload(urls)
 
       if (queueRes.status === 200) {
         const { queued, failed, stats } = queueRes.data
-        console.log(`Queued ${queued.length} songs, ${failed.length} failed`, stats)
+        console.log(`Backend queued ${queued.length} songs, ${failed.length} failed`, stats)
         
         if (failed.length > 0) {
           notifyError('Some songs failed to queue', `${failed.length} songs could not be queued`)
         }
 
         // Process the batch
+        console.log('Starting batch processing...')
         const processRes = await API.processBatchDownload()
         if (processRes.status === 200) {
           const { results, stats: finalStats } = processRes.data
@@ -266,13 +270,15 @@ export function useDownloadManager() {
             if (!song) continue
             
             const downloadItem = progressTracker.getBySong(song)
-            if (result.status === 'completed') {
-              completed++
-              downloadItem.setWebURL(API.downloadFileURL(result.path))
-              downloadItem.setDownloaded()
-            } else {
-              failed++
-              downloadItem.setError(result.error_message)
+            if (downloadItem) {
+              if (result.status === 'completed') {
+                completed++
+                downloadItem.setWebURL(API.downloadFileURL(result.path))
+                downloadItem.setDownloaded()
+              } else if (result.status === 'failed') {
+                failed++
+                downloadItem.setError(result.error_message)
+              }
             }
           }
           
@@ -290,44 +296,58 @@ export function useDownloadManager() {
     }
   }
 
+  function startSequentialDownloads(songs) {
+    // Start downloading songs one at a time
+    // The backend semaphore limits concurrent downloads
+    console.log('Starting sequential downloads for', songs.length, 'songs')
+    
+    let index = 0
+    const downloadNext = () => {
+      if (index >= songs.length) {
+        console.log('All downloads queued')
+        return
+      }
+      
+      const song = songs[index]
+      index++
+      
+      // Download the song (async)
+      download(song)
+      
+      // Queue next download immediately - backend will rate limit
+      // Small delay to avoid overwhelming the backend
+      setTimeout(downloadNext, 100)
+    }
+    
+    downloadNext()
+  }
+
   async function processBatchDownload() {
-    // Process the current queue using the batch download API.
-    // This method processes all queued songs with rate limiting.
+    // Process the current queue by downloading each song sequentially.
+    // The backend batch manager handles rate limiting and retries.
     isProcessingBatch.value = true
     try {
-      const processRes = await API.processBatchDownload()
+      // Get all queued songs from the frontend
+      const queuedSongs = downloadQueue.value
+        .filter(item => item.web_status === STATUS.QUEUED)
+        .map(item => item.song)
       
-      if (processRes.status === 200) {
-        const { results, stats } = processRes.data
-        console.log('Batch processing complete', results, stats)
-        
-        // Update UI with results
-        let completed = 0
-        let failed = 0
-        for (const [taskId, result] of Object.entries(results)) {
-          const song = downloadQueue.value.find(item => item.song.url === taskId)?.song
-          if (!song) continue
-          
-          const downloadItem = progressTracker.getBySong(song)
-          if (result.status === 'completed') {
-            completed++
-            downloadItem.setWebURL(API.downloadFileURL(result.path))
-            downloadItem.setDownloaded()
-          } else {
-            failed++
-            downloadItem.setError(result.error_message)
-          }
-        }
-        
-        if (failed > 0) {
-          notifyError(`${failed} songs failed to download`, 'Check queue for details')
-        } else {
-          notifySuccess(`All ${completed} songs downloaded!`, '')
-        }
+      console.log('Processing batch with', queuedSongs.length, 'songs')
+      
+      // Download each song sequentially - the backend handles the rate limiting
+      for (const song of queuedSongs) {
+        await new Promise(resolve => {
+          // Download the song
+          download(song)
+          // Wait a bit for the download to complete or fail
+          setTimeout(resolve, 100)
+        })
       }
+      
+      console.log('Batch processing finished')
     } catch (err) {
       console.error('Batch processing error:', err)
-      notifyError('Batch processing failed', err.message)
+      notifyError('Batch processing error', err.message)
     } finally {
       isProcessingBatch.value = false
     }

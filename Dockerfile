@@ -1,3 +1,15 @@
+# Build stage for web UI
+FROM node:20-alpine as web-ui-builder
+
+WORKDIR /web-ui-build
+
+# Copy web-ui source
+COPY web-ui-src .
+
+# Install dependencies and build
+RUN npm ci && npm run build
+
+# Final stage
 FROM python:3-alpine
 
 LABEL maintainer="xnetcat (Jakub)"
@@ -25,6 +37,9 @@ COPY . .
 
 # Install spotdl requirements
 RUN uv sync
+
+# Copy built web UI from builder stage
+COPY --from=web-ui-builder /web-ui-build/dist ./spotdl/web-ui/dist
 
 # Create a volume for the output directory
 VOLUME /music

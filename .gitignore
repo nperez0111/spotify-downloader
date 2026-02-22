@@ -145,3 +145,7 @@ temp/
 # VS Code
 .vscode
 *.txt
+
+# Web UI built output (but track the source)
+web-ui-src/dist/
+web-ui-src/node_modules/

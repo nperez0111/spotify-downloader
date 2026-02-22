@@ -1,6 +1,17 @@
 <template>
   <div class="min-h-screen m-2">
-    <h1 class="m-4 text-xl">Queue</h1>
+    <div class="flex justify-between items-center mb-2">
+      <h1 class="m-4 text-xl">Queue</h1>
+      <button
+        v-if="pt.downloadQueue.value.length > 0 && hasCompletedDownloads"
+        @click="downloadAllCompleted"
+        class="btn btn-success m-4"
+        title="Download all completed files"
+      >
+        <Icon icon="clarity:download-line" class="h-5 w-5" />
+        Download All
+      </button>
+    </div>
     <div v-if="pt.downloadQueue.value.length === 0">
       <div class="alert alert-error shadow-lg">
         <svg
@@ -110,6 +121,7 @@
 
 <script setup>
 import { Icon } from '@iconify/vue'
+import { computed } from 'vue'
 
 import { useProgressTracker, useDownloadManager } from '../model/download'
 
@@ -120,6 +132,10 @@ const props = defineProps({
 const pt = useProgressTracker()
 const dm = useDownloadManager()
 
+const hasCompletedDownloads = computed(() => {
+  return pt.downloadQueue.value.some((item) => item.isDownloaded())
+})
+
 function download(url) {
   const a = document.createElement('a')
   a.href = url
@@ -127,6 +143,17 @@ function download(url) {
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
+}
+
+function downloadAllCompleted() {
+  const completedItems = pt.downloadQueue.value.filter((item) => item.isDownloaded())
+  if (completedItems.length === 0) return
+
+  completedItems.forEach((item) => {
+    download(item.web_download_url)
+    // Add a small delay between downloads to avoid overwhelming the browser
+    setTimeout(() => {}, 100)
+  })
 }
 </script>
 

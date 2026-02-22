@@ -2,15 +2,26 @@
   <div class="min-h-screen m-2">
     <div class="flex justify-between items-center mb-2">
       <h1 class="m-4 text-xl">Queue</h1>
-      <button
-        v-if="pt.downloadQueue.value.length > 0 && hasCompletedDownloads"
-        @click="downloadAllCompleted"
-        class="btn btn-success m-4"
-        title="Download all completed files"
-      >
-        <Icon icon="clarity:download-line" class="h-5 w-5" />
-        Download All
-      </button>
+      <div class="flex gap-2 m-4">
+        <button
+          v-if="pt.downloadQueue.value.length > 0"
+          @click="autoDownloadEnabled = !autoDownloadEnabled"
+          :class="`btn ${autoDownloadEnabled ? 'btn-info' : 'btn-outline'} m-0`"
+          :title="autoDownloadEnabled ? 'Auto-download enabled' : 'Enable auto-download when files complete'"
+        >
+          <Icon icon="clarity:auto-save-line" class="h-5 w-5" />
+          Auto-Download
+        </button>
+        <button
+          v-if="pt.downloadQueue.value.length > 0 && hasCompletedDownloads"
+          @click="downloadAllCompleted"
+          class="btn btn-success m-0"
+          title="Download all completed files now"
+        >
+          <Icon icon="clarity:download-line" class="h-5 w-5" />
+          Download All
+        </button>
+      </div>
     </div>
     <div v-if="pt.downloadQueue.value.length === 0">
       <div class="alert alert-error shadow-lg">
@@ -121,7 +132,7 @@
 
 <script setup>
 import { Icon } from '@iconify/vue'
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import { useProgressTracker, useDownloadManager } from '../model/download'
 
@@ -132,9 +143,37 @@ const props = defineProps({
 const pt = useProgressTracker()
 const dm = useDownloadManager()
 
+const autoDownloadEnabled = ref(false)
+const downloadedCount = ref(0)
+
 const hasCompletedDownloads = computed(() => {
   return pt.downloadQueue.value.some((item) => item.isDownloaded())
 })
+
+// Watch for newly completed downloads and auto-download if enabled
+watch(
+  () => pt.downloadQueue.value.map(item => item.web_status),
+  (newStatuses) => {
+    if (autoDownloadEnabled.value) {
+      const completedItems = pt.downloadQueue.value.filter((item) => item.isDownloaded())
+      const newCompletedCount = completedItems.length
+      
+      // If we have new completed items, download them
+      if (newCompletedCount > downloadedCount.value) {
+        const newlyCompleted = completedItems.slice(downloadedCount.value)
+        console.log('[DownloadList] Auto-downloading', newlyCompleted.length, 'newly completed files')
+        newlyCompleted.forEach((item, index) => {
+          // Stagger downloads with 200ms delays
+          setTimeout(() => {
+            download(item.web_download_url)
+          }, index * 200)
+        })
+        downloadedCount.value = newCompletedCount
+      }
+    }
+  },
+  { deep: true }
+)
 
 function download(url) {
   const a = document.createElement('a')
@@ -145,15 +184,34 @@ function download(url) {
   document.body.removeChild(a)
 }
 
-function downloadAllCompleted() {
+async function downloadAllCompleted() {
   const completedItems = pt.downloadQueue.value.filter((item) => item.isDownloaded())
   if (completedItems.length === 0) return
 
-  completedItems.forEach((item) => {
+  console.log('[downloadAllCompleted] Starting sequential downloads for', completedItems.length, 'files')
+  console.log('[downloadAllCompleted] Using 200ms delay between downloads to avoid overwhelming browser')
+  
+  let index = 0
+  const downloadNext = () => {
+    if (index >= completedItems.length) {
+      console.log('[downloadAllCompleted] ✓ All downloads queued (', index, '/', completedItems.length, ')')
+      return
+    }
+    
+    const item = completedItems[index]
+    const fileNum = index + 1
+    index++
+    
+    console.log(`[downloadAllCompleted] Downloading file ${fileNum}/${completedItems.length}: ${item.song.name}`)
     download(item.web_download_url)
-    // Add a small delay between downloads to avoid overwhelming the browser
-    setTimeout(() => {}, 100)
-  })
+    
+    // Stagger downloads to respect browser connection limits (typically 6 per domain)
+    // 200ms delay gives browsers time to manage each download properly
+    setTimeout(downloadNext, 200)
+  }
+  
+  console.log('[downloadAllCompleted] Initiating sequential download loop...')
+  downloadNext()
 }
 </script>
 

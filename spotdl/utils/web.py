@@ -143,8 +143,8 @@ class Client:
 
         # Initialize batch download manager for this client
         self.batch_manager = BatchDownloadManager(
-            batch_size=5,
-            max_concurrent=self.downloader_settings.get("threads", 4),
+            batch_size=10,
+            max_concurrent=self.downloader_settings.get("threads", 10),
             max_retries=3,
             progress_callback=self.song_update,
         )

@@ -486,17 +486,35 @@ async def download_file(
     - returns the file response, filename specified to return as attachment.
     """
 
+    state.logger.info(f"[download_file] REQUEST RECEIVED")
+    state.logger.info(f"[download_file] File path: {file}")
+    state.logger.info(
+        f"[download_file] File format: {client.downloader_settings['format']}"
+    )
+
     expected_path = str((get_spotdl_path() / "web/sessions").absolute())
     if state.web_settings.get("web_use_output_dir", False):
         expected_path = str(
             Path(client.downloader_settings["output"].split("{", 1)[0]).absolute()
         )
 
-    if (not file.endswith(client.downloader_settings["format"])) or (
-        not file.startswith(expected_path)
-    ):
+    # Format should be checked with a dot prefix (e.g., ".mp3" not "mp3")
+    format_with_dot = f".{client.downloader_settings['format']}"
+
+    state.logger.info(f"[download_file] Expected path: {expected_path}")
+    state.logger.info(f"[download_file] Format to check: {format_with_dot}")
+    state.logger.info(
+        f"[download_file] File ends with format: {file.endswith(format_with_dot)}"
+    )
+    state.logger.info(
+        f"[download_file] File starts with expected_path: {file.startswith(expected_path)}"
+    )
+
+    if (not file.endswith(format_with_dot)) or (not file.startswith(expected_path)):
+        state.logger.error(f"[download_file] ✗ Invalid download path: {file}")
         raise HTTPException(status_code=400, detail="Invalid download path.")
 
+    state.logger.info(f"[download_file] ✓ Serving file: {file}")
     return FileResponse(
         file,
         filename=os.path.basename(file),

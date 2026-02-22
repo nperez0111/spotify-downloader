@@ -492,25 +492,34 @@ async def download_file(
         f"[download_file] File format: {client.downloader_settings['format']}"
     )
 
-    expected_path = str((get_spotdl_path() / "web/sessions").absolute())
+    # Try multiple possible paths for spotdl config directory
+    # This handles both XDG standard (~/.config/spotdl) and alternative paths
+    possible_paths = [
+        str((get_spotdl_path() / "web/sessions").absolute()),
+        "/root/config/spotdl/web/sessions",  # Alternative path that's sometimes used
+        str(Path("/root/config/spotdl/web/sessions").absolute()),
+    ]
+
     if state.web_settings.get("web_use_output_dir", False):
-        expected_path = str(
-            Path(client.downloader_settings["output"].split("{", 1)[0]).absolute()
+        possible_paths.insert(
+            0,
+            str(Path(client.downloader_settings["output"].split("{", 1)[0]).absolute()),
         )
 
     # Format should be checked with a dot prefix (e.g., ".mp3" not "mp3")
     format_with_dot = f".{client.downloader_settings['format']}"
 
-    state.logger.info(f"[download_file] Expected path: {expected_path}")
+    state.logger.info(f"[download_file] Possible paths: {possible_paths}")
     state.logger.info(f"[download_file] Format to check: {format_with_dot}")
     state.logger.info(
         f"[download_file] File ends with format: {file.endswith(format_with_dot)}"
     )
-    state.logger.info(
-        f"[download_file] File starts with expected_path: {file.startswith(expected_path)}"
-    )
 
-    if (not file.endswith(format_with_dot)) or (not file.startswith(expected_path)):
+    # Check if file is in one of the allowed directories and has correct format
+    is_valid_path = any(file.startswith(path) for path in possible_paths)
+    state.logger.info(f"[download_file] File is in valid path: {is_valid_path}")
+
+    if (not file.endswith(format_with_dot)) or (not is_valid_path):
         state.logger.error(f"[download_file] ✗ Invalid download path: {file}")
         raise HTTPException(status_code=400, detail="Invalid download path.")
 

@@ -416,11 +416,13 @@ export function useDownloadManager() {
     remove,
     downloadAll,
     downloadBatch,
+    startSequentialDownloads,
     processBatchDownload,
     getBatchStatus,
     clearBatch,
     loading,
     isProcessingBatch,
     batchSize,
+    downloadQueue,
   }
 }

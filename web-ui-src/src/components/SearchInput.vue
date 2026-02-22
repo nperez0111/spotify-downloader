@@ -63,8 +63,18 @@ onBeforeUnmount(() => {
 
 function lookUp(query) {
   if (sm.isValidURL(query)) {
-    dm.fromURL(query)
-    router.push({ name: 'Download' })
+    console.log('[SearchInput] Loading URL:', query)
+    dm.fromURL(query).then(() => {
+      console.log('[SearchInput] URL loaded, starting downloads...')
+      // Auto-start downloads after loading the URL
+      const songsToDownload = dm.downloadQueue.value.map(item => item.song)
+      console.log('[SearchInput] Found', songsToDownload.length, 'songs to download')
+      if (songsToDownload.length > 0) {
+        console.log('[SearchInput] Calling startSequentialDownloads...')
+        dm.startSequentialDownloads(songsToDownload)
+      }
+      router.push({ name: 'Download' })
+    })
   } else if (sm.isValidSearch(query)) {
     let dest = { name: 'Search', params: { query: query } }
     if (sm.isValidSearch(query)) router.push(dest)

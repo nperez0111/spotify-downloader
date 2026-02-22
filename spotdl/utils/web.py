@@ -179,15 +179,27 @@ class Client:
         - message: The message to send.
         """
 
+        app_state.logger.debug(
+            f"[song_update] {progress_handler.song.name} - {message} ({progress_handler.progress}%)"
+        )
+
         update_message = {
             "song": progress_handler.song.json,
             "progress": progress_handler.progress,
             "message": message,
         }
 
-        asyncio.run_coroutine_threadsafe(
-            self.send_update(update_message), app_state.loop
-        )
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self.send_update(update_message), app_state.loop
+            )
+            app_state.logger.debug(
+                f"[song_update] ✓ WebSocket update sent for {progress_handler.song.name}"
+            )
+        except Exception as e:
+            app_state.logger.error(
+                f"[song_update] ✗ Failed to send WebSocket update: {e}"
+            )
 
     @classmethod
     def get_instance(cls, client_id: str) -> Optional["Client"]:
@@ -401,12 +413,21 @@ async def download_url(
     - returns the file path if the song was downloaded.
     """
 
+    state.logger.info("=" * 60)
+    state.logger.info(f"[download_url] REQUEST RECEIVED")
+    state.logger.info(f"[download_url] URL: {url}")
+    state.logger.info(f"[download_url] Client ID: {client.client_id}")
+
     if state.web_settings.get("web_use_output_dir", False):
         client.downloader.settings["output"] = client.downloader_settings["output"]
     else:
         client.downloader.settings["output"] = str(
             (get_spotdl_path() / f"web/sessions/{client.client_id}").absolute()
         )
+
+    state.logger.info(
+        f"[download_url] Output directory: {client.downloader.settings['output']}"
+    )
 
     client.downloader.progress_handler = ProgressHandler(
         simple_tui=True,
@@ -415,22 +436,33 @@ async def download_url(
 
     try:
         # Fetch song metadata
+        state.logger.info(f"[download_url] Fetching song metadata from URL...")
         song = Song.from_url(url)
+        state.logger.info(f"[download_url] ✓ Got song: {song.name} by {song.artist}")
 
         # Download Song
+        state.logger.info(f"[download_url] Starting pool_download for {song.name}...")
         _, path = await client.downloader.pool_download(song)
+        state.logger.info(f"[download_url] ✓ pool_download completed")
 
         if path is None:
-            state.logger.error(f"Failure downloading {song.name}")
+            state.logger.error(
+                f"[download_url] ✗ Failure downloading {song.name} - path is None"
+            )
 
             raise HTTPException(
                 status_code=500, detail=f"Error downloading: {song.name}"
             )
 
+        state.logger.info(f"[download_url] ✓ DOWNLOAD SUCCESS: {path.absolute()}")
+        state.logger.info("=" * 60)
         return str(path.absolute())
 
     except Exception as exception:
-        state.logger.error(f"Error downloading! {exception}")
+        state.logger.error(
+            f"[download_url] ✗ ERROR downloading! {type(exception).__name__}: {exception}"
+        )
+        state.logger.error("=" * 60)
 
         raise HTTPException(
             status_code=500, detail=f"Error downloading: {exception}"

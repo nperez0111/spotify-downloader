@@ -164,28 +164,41 @@ export function useDownloadManager() {
   }
 
   function download(song) {
-    console.log('Downloading', song)
+    console.log('[download] Starting download for:', song.name)
+    console.log('[download] Song URL:', song.url)
+    
     const downloadItem = progressTracker.getBySong(song)
+    if (!downloadItem) {
+      console.error('[download] ERROR: Download item not found for song:', song.name)
+      return
+    }
+    
+    console.log('[download] Setting status to "Downloading..."')
     downloadItem.setDownloading()
     
+    console.log('[download] Calling API.download()...')
     API.download(song.url)
       .then((res) => {
-        console.log('Received Response:', res)
+        console.log('[download] ✓ Received response for', song.name)
+        console.log('[download] Response status:', res.status)
+        console.log('[download] Response data:', res.data)
+        
         if (res.status === 200) {
           let filename = res.data
-          console.log('Download Complete:', filename)
+          console.log('[download] ✓ Download successful:', filename)
           downloadItem.setWebURL(API.downloadFileURL(filename))
           downloadItem.setDownloaded()
           notifySuccess(`Downloaded: ${song.name}`, `by ${song.artist}`)
         } else {
-          console.log('Error:', res)
+          console.log('[download] ✗ Bad response status:', res.status)
           const errorMsg = parseErrorMessage(res.data)
           downloadItem.setError(errorMsg)
           notifyError(`Failed to download: ${song.name}`, errorMsg)
         }
       })
       .catch((err) => {
-        console.log('Download Error:', err.message)
+        console.log('[download] ✗ Download error for', song.name)
+        console.log('[download] Error:', err)
         const errorMsg = parseErrorMessage(err)
         downloadItem.setError(errorMsg)
         notifyError(`Failed to download: ${song.name}`, errorMsg)
@@ -218,16 +231,24 @@ export function useDownloadManager() {
   }
 
   function downloadAll(songs) {
-    console.log('Downloading all', songs.length, 'songs')
+    console.log('========================================')
+    console.log('[downloadAll] Starting download of', songs.length, 'songs')
+    console.log('[downloadAll] Songs:', songs.map(s => s.name))
     notifySuccess(`Added ${songs.length} songs`, 'to download queue')
 
     // Queue all songs to the frontend
+    console.log('[downloadAll] Queueing songs to frontend...')
     for (const song of songs) {
+      console.log(`[downloadAll] Adding song to queue: ${song.name}`)
       progressTracker.appendSong(song)
     }
     
+    console.log('[downloadAll] All songs queued to frontend, queue size:', downloadQueue.value.length)
+    console.log('[downloadAll] Starting sequential downloads...')
+    
     // Start downloads sequentially - backend semaphore limits concurrent downloads
     startSequentialDownloads(songs)
+    console.log('========================================')
   }
 
   async function downloadBatch(songs) {
@@ -299,17 +320,23 @@ export function useDownloadManager() {
   function startSequentialDownloads(songs) {
     // Start downloading songs one at a time
     // The backend semaphore limits concurrent downloads
-    console.log('Starting sequential downloads for', songs.length, 'songs')
+    console.log('========================================')
+    console.log('[startSequentialDownloads] Starting sequential downloads for', songs.length, 'songs')
+    console.log('[startSequentialDownloads] Using 100ms delay between requests')
     
     let index = 0
     const downloadNext = () => {
       if (index >= songs.length) {
-        console.log('All downloads queued')
+        console.log('[startSequentialDownloads] ✓ All download requests queued (', index, '/', songs.length, ')')
+        console.log('========================================')
         return
       }
       
       const song = songs[index]
+      const songNum = index + 1
       index++
+      
+      console.log(`[startSequentialDownloads] Requesting download ${songNum}/${songs.length}: ${song.name}`)
       
       // Download the song (async)
       download(song)
@@ -319,6 +346,7 @@ export function useDownloadManager() {
       setTimeout(downloadNext, 100)
     }
     
+    console.log('[startSequentialDownloads] Initiating download loop...')
     downloadNext()
   }
 

@@ -103,5 +103,7 @@ export default {
   check_for_update,
   ws_onmessage,
   ws_onerror,
-  getVersion
+  getVersion,
+  wsConnection,
+  get: API.get.bind(API),
 }

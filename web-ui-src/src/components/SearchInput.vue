@@ -35,6 +35,7 @@ import router from '../router'
 
 import { useSearchManager } from '../model/search'
 import { useDownloadManager } from '../model/download'
+import { notifyWarning } from '../model/notifications'
 
 const sm = useSearchManager()
 const dm = useDownloadManager()
@@ -68,7 +69,7 @@ function lookUp(query) {
     let dest = { name: 'Search', params: { query: query } }
     if (sm.isValidSearch(query)) router.push(dest)
   } else {
-    console.log('Invalid search term.')
+    notifyWarning('Invalid search', 'Please enter a song name, artist, or Spotify URL')
   }
 }
 </script>

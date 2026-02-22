@@ -25,6 +25,7 @@
       <SearchInput class="w-full" />
     </div>
     <div class="navbar-end">
+      <ConnectionStatus />
       <label class="btn btn-circle swap swap-rotate mx-2">
         <input
           type="checkbox"
@@ -87,6 +88,7 @@ import { useSearchManager } from '../model/search'
 
 import { Icon } from '@iconify/vue'
 import SearchInput from '../components/SearchInput.vue'
+import ConnectionStatus from '../components/ConnectionStatus.vue'
 
 const pt = useProgressTracker()
 const dm = useDownloadManager()

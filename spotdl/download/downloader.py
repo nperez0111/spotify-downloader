@@ -202,15 +202,24 @@ class Downloader:
             if audio_class is None:
                 raise DownloaderError(f"Invalid audio provider: {audio_provider}")
 
-            self.audio_providers.append(
-                audio_class(
-                    output_format=self.settings["format"],
-                    cookie_file=self.settings["cookie_file"],
-                    search_query=self.settings["search_query"],
-                    filter_results=self.settings["filter_results"],
-                    yt_dlp_args=self.settings["yt_dlp_args"],
+            try:
+                self.audio_providers.append(
+                    audio_class(
+                        output_format=self.settings["format"],
+                        cookie_file=self.settings["cookie_file"],
+                        search_query=self.settings["search_query"],
+                        filter_results=self.settings["filter_results"],
+                        yt_dlp_args=self.settings["yt_dlp_args"],
+                    )
                 )
-            )
+            except Exception as e:
+                # Skip providers that fail to initialize (e.g., SoundCloud with no valid client ID)
+                logger.warning(
+                    "Failed to initialize %s audio provider: %s. "
+                    "This provider will be skipped.",
+                    audio_provider,
+                    str(e),
+                )
 
         # Initialize list of errors
         self.errors: List[str] = []
@@ -393,6 +402,104 @@ class Downloader:
             logger.debug("%s failed to find %s", audio_provider.name, song.display_name)
 
         raise LookupError(f"No results found for song: {song.display_name}")
+
+    def get_download_metadata_with_fallback(
+        self, download_url: str, display_progress_tracker
+    ) -> Optional[Dict]:
+        """
+        Try to get download metadata with fallback to other providers.
+
+        ### Arguments
+        - download_url: The URL to download from.
+        - display_progress_tracker: The progress tracker for the song.
+
+        ### Returns
+        - The download metadata if successful, None otherwise.
+        """
+
+        # Try the first provider (already determined by search)
+        audio_downloader = AudioProvider(
+            output_format=self.settings["format"],
+            cookie_file=self.settings["cookie_file"],
+            search_query=self.settings["search_query"],
+            filter_results=self.settings["filter_results"],
+            yt_dlp_args=self.settings["yt_dlp_args"],
+        )
+
+        # Add progress hook
+        audio_downloader.audio_handler.add_progress_hook(
+            display_progress_tracker.yt_dlp_progress_hook
+        )
+
+        try:
+            download_info = audio_downloader.get_download_metadata(
+                download_url, download=True
+            )
+            if download_info:
+                logger.debug(
+                    "Successfully got download metadata using primary provider for %s",
+                    download_url,
+                )
+                return download_info
+        except Exception as e:
+            logger.debug("Primary provider failed to get download metadata: %s", str(e))
+            display_progress_tracker.update(
+                f"Retrying with fallback provider ({str(e)[:50]}...)"
+            )
+
+        # Try fallback providers (youtube after youtube-music, etc.)
+        fallback_providers = []
+        if self.settings["audio_providers"][0] == "youtube-music":
+            fallback_providers = ["youtube", "soundcloud"]
+        elif self.settings["audio_providers"][0] == "youtube":
+            fallback_providers = ["youtube-music", "soundcloud"]
+
+        for fallback_provider_name in fallback_providers:
+            if fallback_provider_name not in AUDIO_PROVIDERS:
+                continue
+
+            logger.debug(
+                "Trying fallback provider: %s for download URL: %s",
+                fallback_provider_name,
+                download_url,
+            )
+
+            try:
+                fallback_audio_provider = AUDIO_PROVIDERS[fallback_provider_name](
+                    output_format=self.settings["format"],
+                    cookie_file=self.settings["cookie_file"],
+                    search_query=self.settings["search_query"],
+                    filter_results=self.settings["filter_results"],
+                    yt_dlp_args=self.settings["yt_dlp_args"],
+                )
+
+                # Add progress hook
+                fallback_audio_provider.audio_handler.add_progress_hook(
+                    display_progress_tracker.yt_dlp_progress_hook
+                )
+
+                download_info = fallback_audio_provider.get_download_metadata(
+                    download_url, download=True
+                )
+                if download_info:
+                    logger.debug(
+                        "Successfully got download metadata using fallback provider: %s",
+                        fallback_provider_name,
+                    )
+                    display_progress_tracker.update(
+                        f"Downloaded using {fallback_provider_name}"
+                    )
+                    return download_info
+            except Exception as e:
+                logger.debug(
+                    "Fallback provider %s failed: %s",
+                    fallback_provider_name,
+                    str(e),
+                )
+                continue
+
+        # If all providers failed
+        return None
 
     def search_lyrics(self, song: Song) -> Optional[str]:
         """
@@ -649,38 +756,11 @@ class Downloader:
             else:
                 download_url = song.download_url
 
-            # Initialize audio downloader
-            audio_downloader: Union[AudioProvider, Piped]
-            if self.settings["audio_providers"][0] == "piped":
-                audio_downloader = Piped(
-                    output_format=self.settings["format"],
-                    cookie_file=self.settings["cookie_file"],
-                    search_query=self.settings["search_query"],
-                    filter_results=self.settings["filter_results"],
-                    yt_dlp_args=self.settings["yt_dlp_args"],
-                )
-            else:
-                audio_downloader = AudioProvider(
-                    output_format=self.settings["format"],
-                    cookie_file=self.settings["cookie_file"],
-                    search_query=self.settings["search_query"],
-                    filter_results=self.settings["filter_results"],
-                    yt_dlp_args=self.settings["yt_dlp_args"],
-                )
-
             logger.debug("Downloading %s using %s", song.display_name, download_url)
 
-            # Add progress hook to the audio provider
-            audio_downloader.audio_handler.add_progress_hook(
-                display_progress_tracker.yt_dlp_progress_hook
-            )
-
-            download_info = audio_downloader.get_download_metadata(
-                download_url, download=True
-            )
-
-            temp_file = Path(
-                temp_folder / f"{download_info['id']}.{download_info['ext']}"
+            # Try to get download metadata with fallback to other providers
+            download_info = self.get_download_metadata_with_fallback(
+                download_url, display_progress_tracker
             )
 
             if download_info is None:
@@ -691,8 +771,12 @@ class Downloader:
                 )
 
                 raise DownloaderError(
-                    f"yt-dlp failed to get metadata for: {song.name} - {song.artist}"
+                    f"All audio providers failed to download: {song.name} - {song.artist}"
                 )
+
+            temp_file = Path(
+                temp_folder / f"{download_info['id']}.{download_info['ext']}"
+            )
 
             display_progress_tracker.notify_download_complete()
 
@@ -791,9 +875,18 @@ class Downloader:
 
             # SponsorBlock post processor
             if self.settings["sponsor_block"]:
+                # Create a temporary audio handler for sponsor block processing
+                temp_audio_handler = AudioProvider(
+                    output_format=self.settings["format"],
+                    cookie_file=self.settings["cookie_file"],
+                    search_query=self.settings["search_query"],
+                    filter_results=self.settings["filter_results"],
+                    yt_dlp_args=self.settings["yt_dlp_args"],
+                ).audio_handler
+
                 # Initialize the sponsorblock post processor
                 post_processor = SponsorBlockPP(
-                    audio_downloader.audio_handler, SPONSOR_BLOCK_CATEGORIES
+                    temp_audio_handler, SPONSOR_BLOCK_CATEGORIES
                 )
 
                 # Run the post processor to get the sponsor segments
@@ -810,7 +903,7 @@ class Downloader:
 
                     # Initialize the modify chapters post processor
                     modify_chapters = ModifyChaptersPP(
-                        downloader=audio_downloader.audio_handler,
+                        downloader=temp_audio_handler,
                         remove_sponsor_segments=SPONSOR_BLOCK_CATEGORIES,
                     )
 

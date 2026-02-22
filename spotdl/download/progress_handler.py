@@ -350,7 +350,9 @@ class SongTracker:
         - finish: Whether to finish the task.
         """
 
-        self.update("Error")
+        # Create a more descriptive error message with user-friendly context
+        error_message = self._format_error_message(traceback)
+        self.update(f"Error - {error_message}")
         if finish:
             self.progress = 100
 
@@ -358,6 +360,67 @@ class SongTracker:
             logger.exception(message)
         else:
             logger.error("%s: %s", traceback.__class__.__name__, traceback)
+
+    def _format_error_message(self, exception: Exception) -> str:
+        """
+        Format an exception into a user-friendly error message.
+
+        ### Arguments
+        - exception: The exception to format.
+
+        ### Returns
+        - A formatted error message.
+        """
+
+        error_str = str(exception)
+        exception_name = exception.__class__.__name__
+
+        # Parse common yt-dlp errors for better user feedback
+        if "YT-DLP download error" in error_str:
+            # Extract the actual error from yt-dlp
+            if "Video unavailable" in error_str or "Private video" in error_str:
+                return "Audio: Video is private or unavailable"
+            elif (
+                "georestricted" in error_str.lower()
+                or "restricted" in error_str.lower()
+            ):
+                return "Audio: Video is geo-restricted in your region"
+            elif "age-restricted" in error_str.lower():
+                return "Audio: Video is age-restricted"
+            elif "429" in error_str:
+                return "Audio: Too many requests (rate limited) - try again later"
+            elif "403" in error_str or "forbidden" in error_str.lower():
+                return "Audio: Access forbidden - video may be unavailable"
+            elif "404" in error_str or "not found" in error_str.lower():
+                return "Audio: Video not found"
+            elif "connection" in error_str.lower() or "timeout" in error_str.lower():
+                return "Audio: Connection timeout - check your internet"
+            else:
+                # Return the actual yt-dlp error if we can't parse it
+                return f"Audio: {error_str}"
+
+        # For other error types, provide helpful context
+        if exception_name == "AudioProviderError":
+            return error_str if error_str else "Failed to find or download audio"
+        elif exception_name == "MetadataError":
+            return "Failed to embed song metadata"
+        elif exception_name == "FFmpegError":
+            return "Audio conversion failed - ffmpeg may not be installed"
+        elif exception_name == "DownloaderError":
+            if "All audio providers failed" in error_str:
+                return "No audio providers could download this song (tried YouTube Music, YouTube, SoundCloud)"
+            return error_str if error_str else "Download failed"
+        elif "HTTPError" in exception_name:
+            if "429" in error_str:
+                return "Too many requests - rate limited by service"
+            elif "403" in error_str:
+                return "Access forbidden - service may be blocking you"
+            elif "404" in error_str:
+                return "Resource not found on the server"
+            return f"HTTP Error: {error_str}"
+        else:
+            # Generic fallback
+            return f"{exception_name}: {error_str}" if error_str else exception_name
 
     def notify_download_complete(self, status="Converting") -> None:
         """

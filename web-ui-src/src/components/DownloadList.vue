@@ -43,23 +43,44 @@
           <p>
             {{ downloadItem.song.album_name }}
           </p>
-          <div class="stat-figure text-primary flex space-x-2 items-center">
-            <div
-              v-if="downloadItem.isErrored()"
-              class="badge badge-error gap-2"
-            >
-              error
+          <div v-if="downloadItem.isErrored()" class="alert alert-error mt-2 py-2">
+            <div>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                class="stroke-current flex-shrink-0 w-5 h-5"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                ></path>
+              </svg>
+              <span class="text-sm">{{ downloadItem.error_details || 'Download failed' }}</span>
             </div>
-            <!-- // If Websocket connection exists, set status using descriptive events (message), else, fallback to simple statuses. -->
-            <span class="badge">{{
-              downloadItem.message || downloadItem.web_status
-            }}</span>
-            <button
-              class="btn btn-error btn-outline btn-square"
-              @click="dm.remove(downloadItem.song)"
-            >
-              <Icon icon="clarity:trash-line" class="h-6 w-6" />
-            </button>
+          </div>
+           <div class="stat-figure text-primary flex space-x-2 items-center">
+             <!-- // If Websocket connection exists, set status using descriptive events (message), else, fallback to simple statuses. -->
+             <span class="badge" :title="downloadItem.message">{{
+               downloadItem.message || downloadItem.web_status
+             }}</span>
+             <button
+               v-if="downloadItem.canRetry()"
+               class="btn btn-warning btn-outline btn-square"
+               @click="dm.retry(downloadItem.song)"
+               title="Retry download"
+             >
+               <Icon icon="clarity:reload-line" class="h-6 w-6" />
+             </button>
+             <button
+               class="btn btn-error btn-outline btn-square"
+               @click="dm.remove(downloadItem.song)"
+               :title="`Remove ${downloadItem.song.name}`"
+             >
+               <Icon icon="clarity:trash-line" class="h-6 w-6" />
+             </button>
             <a
               v-if="downloadItem.isDownloaded()"
               class="btn btn-square btn-ghost"

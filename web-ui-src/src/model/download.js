@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 
 import API from '/src/model/api'
+import { notifyError, notifySuccess } from './notifications'
 
 const STATUS = {
   QUEUED: 'In Queue',
@@ -18,15 +19,21 @@ class DownloadItem {
     this.progress = 0
     this.message = ''
     this.web_download_url = null
+    this.error_details = null
+    this.retry_count = 0
+    this.max_retries = 3
   }
   setDownloading() {
     this.web_status = STATUS.DOWNLOADING
+    this.error_details = null
   }
   setDownloaded() {
     this.web_status = STATUS.DOWNLOADED
+    this.error_details = null
   }
-  setError() {
+  setError(errorDetails = null) {
     this.web_status = STATUS.ERROR
+    this.error_details = errorDetails
   }
   setWebURL(URL) {
     this.web_download_url = URL
@@ -43,6 +50,9 @@ class DownloadItem {
   }
   isErrored() {
     return this.web_status === STATUS.ERROR
+  }
+  canRetry() {
+    return this.isErrored() && this.retry_count < this.max_retries
   }
   wsUpdate(message) {
     this.progress = message.progress
@@ -83,6 +93,31 @@ export function useProgressTracker() {
 }
 
 const progressTracker = useProgressTracker()
+
+// Parse error messages to provide more helpful feedback
+function parseErrorMessage(error) {
+  if (!error) return 'An unknown error occurred'
+  
+  const message = error.message || error.toString()
+  
+  if (message.includes('404') || message.includes('not found')) {
+    return 'Song not found or unavailable'
+  }
+  if (message.includes('403') || message.includes('forbidden')) {
+    return 'Song unavailable in your region'
+  }
+  if (message.includes('timeout')) {
+    return 'Request timed out - try again'
+  }
+  if (message.includes('ECONNREFUSED')) {
+    return 'Backend connection failed'
+  }
+  if (message.includes('Network')) {
+    return 'Network error - check your connection'
+  }
+  
+  return message
+}
 
 // If Websocket connection exists, set status using descriptive events, else, fallback to simple messages.
 API.ws_onmessage((event) => {
@@ -127,26 +162,46 @@ export function useDownloadManager() {
 
   function download(song) {
     console.log('Downloading', song)
-    progressTracker.getBySong(song).setDownloading()
+    const downloadItem = progressTracker.getBySong(song)
+    downloadItem.setDownloading()
+    
     API.download(song.url)
       .then((res) => {
         console.log('Received Response:', res)
         if (res.status === 200) {
           let filename = res.data
           console.log('Download Complete:', filename)
-          progressTracker
-            .getBySong(song)
-            .setWebURL(API.downloadFileURL(filename))
-          progressTracker.getBySong(song).setDownloaded()
+          downloadItem.setWebURL(API.downloadFileURL(filename))
+          downloadItem.setDownloaded()
+          notifySuccess(`Downloaded: ${song.name}`, `by ${song.artist}`)
         } else {
           console.log('Error:', res)
-          progressTracker.getBySong(song).setError()
+          const errorMsg = parseErrorMessage(res.data)
+          downloadItem.setError(errorMsg)
+          notifyError(`Failed to download: ${song.name}`, errorMsg)
         }
       })
       .catch((err) => {
-        console.log('Other Error:', err.message)
-        progressTracker.getBySong(song).setError()
+        console.log('Download Error:', err.message)
+        const errorMsg = parseErrorMessage(err)
+        downloadItem.setError(errorMsg)
+        notifyError(`Failed to download: ${song.name}`, errorMsg)
       })
+  }
+
+  function retry(song) {
+    const downloadItem = progressTracker.getBySong(song)
+    if (downloadItem.canRetry()) {
+      downloadItem.retry_count++
+      console.log(
+        `Retrying download for ${song.name} (attempt ${downloadItem.retry_count}/${downloadItem.max_retries})`
+      )
+      // Exponential backoff: wait 1s, 2s, 4s
+      const delay = Math.pow(2, downloadItem.retry_count - 1) * 1000
+      setTimeout(() => {
+        download(song)
+      }, delay)
+    }
   }
 
   function queue(song, beginDownload = true) {
@@ -160,6 +215,7 @@ export function useDownloadManager() {
 
   function downloadAll(songs) {
     console.log('Downloading all', songs.length, 'songs')
+    notifySuccess(`Added ${songs.length} songs`, 'to download queue')
     for (const song of songs) {
       queue(song)
     }
@@ -168,6 +224,7 @@ export function useDownloadManager() {
   return {
     fromURL,
     download,
+    retry,
     queue,
     remove,
     downloadAll,

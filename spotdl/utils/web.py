@@ -472,7 +472,6 @@ async def download_url(
 @router.get("/api/download/file")
 async def download_file(
     file: str,
-    client: Client = Depends(get_client),
     state: ApplicationState = Depends(get_current_state),
 ):
     """
@@ -480,47 +479,38 @@ async def download_file(
 
     ### Arguments
     - file: The file path.
-    - client: The client's state.
 
     ### Returns
     - returns the file response, filename specified to return as attachment.
     """
 
-    state.logger.info(f"[download_file] REQUEST RECEIVED")
-    state.logger.info(f"[download_file] File path: {file}")
-    state.logger.info(
-        f"[download_file] File format: {client.downloader_settings['format']}"
-    )
+    print(f"[download_file] REQUEST RECEIVED - File: {file}", flush=True)
 
     # Try multiple possible paths for spotdl config directory
     # This handles both XDG standard (~/.config/spotdl) and alternative paths
+    # Files should only be downloadable from web/sessions directories
     possible_paths = [
         str((get_spotdl_path() / "web/sessions").absolute()),
         "/root/config/spotdl/web/sessions",  # Alternative path that's sometimes used
         str(Path("/root/config/spotdl/web/sessions").absolute()),
     ]
 
-    if state.web_settings.get("web_use_output_dir", False):
-        possible_paths.insert(
-            0,
-            str(Path(client.downloader_settings["output"].split("{", 1)[0]).absolute()),
-        )
+    # Only allow downloads from web/sessions - these are temporary user download files
+    # Check if file is in one of the allowed directories
+    is_valid_path = any(file.startswith(path) for path in possible_paths)
 
-    # Format should be checked with a dot prefix (e.g., ".mp3" not "mp3")
-    format_with_dot = f".{client.downloader_settings['format']}"
+    print(f"[download_file] Possible paths: {possible_paths}", flush=True)
+    print(f"[download_file] File is in valid path: {is_valid_path}", flush=True)
 
-    state.logger.info(f"[download_file] Possible paths: {possible_paths}")
-    state.logger.info(f"[download_file] Format to check: {format_with_dot}")
-    state.logger.info(
-        f"[download_file] File ends with format: {file.endswith(format_with_dot)}"
+    # Basic security: only allow .mp3, .m4a, .flac, .wav files
+    allowed_extensions = (".mp3", ".m4a", ".flac", ".wav", ".aac", ".opus")
+    has_valid_extension = any(file.lower().endswith(ext) for ext in allowed_extensions)
+    print(
+        f"[download_file] File has valid extension: {has_valid_extension}", flush=True
     )
 
-    # Check if file is in one of the allowed directories and has correct format
-    is_valid_path = any(file.startswith(path) for path in possible_paths)
-    state.logger.info(f"[download_file] File is in valid path: {is_valid_path}")
-
-    if (not file.endswith(format_with_dot)) or (not is_valid_path):
-        state.logger.error(f"[download_file] ✗ Invalid download path: {file}")
+    if (not has_valid_extension) or (not is_valid_path):
+        print(f"[download_file] ✗ Invalid download path: {file}", flush=True)
         raise HTTPException(status_code=400, detail="Invalid download path.")
 
     state.logger.info(f"[download_file] ✓ Serving file: {file}")

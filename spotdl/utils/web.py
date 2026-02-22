@@ -31,6 +31,7 @@ from uvicorn import Server
 from spotdl._version import __version__
 from spotdl.download.downloader import Downloader
 from spotdl.download.progress_handler import ProgressHandler, SongTracker
+from spotdl.download.batch_manager import BatchDownloadManager
 from spotdl.types.album import Album
 from spotdl.types.artist import Artist
 from spotdl.types.options import (
@@ -140,6 +141,14 @@ class Client:
 
         self.downloader.progress_handler.web_ui = True
 
+        # Initialize batch download manager for this client
+        self.batch_manager = BatchDownloadManager(
+            batch_size=5,
+            max_concurrent=self.downloader_settings.get("threads", 4),
+            max_retries=3,
+            progress_callback=self.song_update,
+        )
+
     async def connect(self):
         """
         Called when a new client connects to the websocket.
@@ -213,6 +222,7 @@ class ApplicationState:
     downloader_settings: DownloaderOptions
     clients: Dict[str, Client] = {}
     logger: logging.Logger
+    batch_managers: Dict[str, BatchDownloadManager] = {}
 
 
 router = APIRouter()
@@ -461,6 +471,186 @@ async def download_file(
     )
 
 
+@router.post("/api/download/batch/queue")
+async def queue_batch_download(
+    urls: List[str],
+    client: Client = Depends(get_client),
+    state: ApplicationState = Depends(get_current_state),
+) -> Dict[str, Any]:
+    """
+    Queue a batch of songs for download.
+
+    This endpoint adds songs to the batch download queue instead of
+    downloading them immediately. Downloads will be processed with
+    rate limiting to prevent network overload.
+
+    ### Arguments
+    - urls: List of song URLs to download
+    - client: The client's state
+
+    ### Returns
+    - returns dict with queue information and task IDs
+    """
+
+    try:
+        if not client.batch_manager.queue:
+            await client.batch_manager.initialize()
+
+        task_ids = []
+        failed_urls = []
+
+        for url in urls:
+            try:
+                song = Song.from_url(url)
+                task_id = await client.batch_manager.add_to_queue(song)
+                task_ids.append(task_id)
+            except Exception as e:
+                state.logger.warning(f"Failed to queue song from {url}: {e}")
+                failed_urls.append({"url": url, "error": str(e)})
+
+        stats = await client.batch_manager.get_queue_stats()
+
+        return {
+            "queued": task_ids,
+            "failed": failed_urls,
+            "stats": stats,
+        }
+
+    except Exception as exception:
+        state.logger.error(f"Error queuing batch download: {exception}")
+        raise HTTPException(
+            status_code=500, detail=f"Error queuing batch: {exception}"
+        ) from exception
+
+
+@router.post("/api/download/batch/process")
+async def process_batch_download(
+    client: Client = Depends(get_client),
+    state: ApplicationState = Depends(get_current_state),
+) -> Dict[str, Any]:
+    """
+    Start processing the download batch queue.
+
+    This endpoint starts downloading all queued songs with batching
+    and rate limiting applied. Downloads happen in the background
+    with progress updates sent via WebSocket.
+
+    ### Arguments
+    - client: The client's state
+
+    ### Returns
+    - returns dict with processing status
+    """
+
+    try:
+        if not client.batch_manager.queue:
+            await client.batch_manager.initialize()
+
+        # Set up output directory
+        if state.web_settings.get("web_use_output_dir", False):
+            client.downloader.settings["output"] = client.downloader_settings["output"]
+        else:
+            client.downloader.settings["output"] = str(
+                (get_spotdl_path() / f"web/sessions/{client.client_id}").absolute()
+            )
+
+        client.downloader.progress_handler = ProgressHandler(
+            simple_tui=True,
+            update_callback=client.song_update,
+        )
+
+        async def download_song_wrapper(song: Song):
+            """Wrapper around downloader for batch manager."""
+            try:
+                _, path = await client.downloader.pool_download(song)
+                if path is None:
+                    return False, None, f"Failed to download {song.name}"
+                return True, path, None
+            except Exception as e:
+                return False, None, str(e)
+
+        # Process the queue with batching
+        results = await client.batch_manager.process_queue(download_song_wrapper)
+
+        stats = await client.batch_manager.get_queue_stats()
+
+        return {
+            "results": results,
+            "stats": stats,
+        }
+
+    except Exception as exception:
+        state.logger.error(f"Error processing batch download: {exception}")
+        raise HTTPException(
+            status_code=500, detail=f"Error processing batch: {exception}"
+        ) from exception
+
+
+@router.get("/api/download/batch/status")
+async def get_batch_status(
+    client: Client = Depends(get_client),
+) -> Dict[str, Any]:
+    """
+    Get the current status of the batch download queue.
+
+    ### Arguments
+    - client: The client's state
+
+    ### Returns
+    - returns dict with queue stats and task statuses
+    """
+
+    if not client.batch_manager.queue:
+        await client.batch_manager.initialize()
+
+    stats = await client.batch_manager.get_queue_stats()
+    tasks = await client.batch_manager.get_all_tasks()
+
+    # Convert tasks to JSON-serializable format
+    tasks_data = {
+        task_id: {
+            "song": task.song.json,
+            "status": task.status.value,
+            "retry_count": task.retry_count,
+            "error_message": task.error_message,
+            "created_at": task.created_at,
+            "started_at": task.started_at,
+            "completed_at": task.completed_at,
+        }
+        for task_id, task in tasks.items()
+    }
+
+    return {
+        "stats": stats,
+        "tasks": tasks_data,
+    }
+
+
+@router.post("/api/download/batch/clear")
+async def clear_batch_queue(
+    client: Client = Depends(get_client),
+    state: ApplicationState = Depends(get_current_state),
+) -> Dict[str, str]:
+    """
+    Clear all pending tasks from the batch download queue.
+
+    ### Arguments
+    - client: The client's state
+
+    ### Returns
+    - returns confirmation message
+    """
+
+    try:
+        await client.batch_manager.clear_queue()
+        return {"message": "Queue cleared successfully"}
+    except Exception as exception:
+        state.logger.error(f"Error clearing batch queue: {exception}")
+        raise HTTPException(
+            status_code=500, detail=f"Error clearing queue: {exception}"
+        ) from exception
+
+
 @router.get("/api/settings")
 def get_settings(
     client: Client = Depends(get_client),
@@ -603,7 +793,8 @@ def get_options() -> Dict[str, Any]:
                 type_name: str = action.type.__name__  # type: ignore
 
         if isinstance(
-            action, argparse._StoreConstAction  # pylint: disable=protected-access
+            action,
+            argparse._StoreConstAction,  # pylint: disable=protected-access
         ):
             type_name = "bool"
 

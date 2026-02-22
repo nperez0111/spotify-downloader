@@ -93,6 +93,30 @@ function ws_onerror(fn) {
   return (wsConnection.onerror = fn)
 }
 
+function queueBatchDownload(urls) {
+  return API.post('/api/download/batch/queue', { urls }, {
+    params: { client_id: sessionID },
+  })
+}
+
+function processBatchDownload() {
+  return API.post('/api/download/batch/process', {}, {
+    params: { client_id: sessionID },
+  })
+}
+
+function getBatchStatus() {
+  return API.get('/api/download/batch/status', {
+    params: { client_id: sessionID },
+  })
+}
+
+function clearBatchQueue() {
+  return API.post('/api/download/batch/clear', {}, {
+    params: { client_id: sessionID },
+  })
+}
+
 export default {
   search,
   open,
@@ -106,4 +130,9 @@ export default {
   getVersion,
   wsConnection,
   get: API.get.bind(API),
+  post: API.post.bind(API),
+  queueBatchDownload,
+  processBatchDownload,
+  getBatchStatus,
+  clearBatchQueue,
 }

@@ -132,6 +132,9 @@ API.ws_onerror((event) => {
 
 export function useDownloadManager() {
   const loading = ref(false)
+  const isProcessingBatch = ref(false)
+  const batchSize = ref(50) // Number of songs to queue before auto-starting batch
+
   function fromURL(url) {
     loading.value = true
     return API.open(url)
@@ -142,11 +145,11 @@ export function useDownloadManager() {
           if (Array.isArray(songs)) {
             for (const song of songs) {
               console.log('Opened Song:', song)
-              queue(song)
+              queue(song, false) // Don't start download immediately
             }
           } else {
             console.log('Opened Song:', songs)
-            queue(songs)
+            queue(songs, false)
           }
         } else {
           console.log('Error:', res)
@@ -208,6 +211,7 @@ export function useDownloadManager() {
     progressTracker.appendSong(song)
     if (beginDownload) download(song)
   }
+
   function remove(song) {
     console.log('removing')
     progressTracker.removeSong(song)
@@ -216,8 +220,143 @@ export function useDownloadManager() {
   function downloadAll(songs) {
     console.log('Downloading all', songs.length, 'songs')
     notifySuccess(`Added ${songs.length} songs`, 'to download queue')
-    for (const song of songs) {
-      queue(song)
+
+    // For large playlists, use batch downloading
+    if (songs.length > 20) {
+      console.log('Using batch mode for large playlist')
+      downloadBatch(songs)
+    } else {
+      // For small playlists, use sequential downloading
+      for (const song of songs) {
+        queue(song, false)
+      }
+      processBatchDownload()
+    }
+  }
+
+  async function downloadBatch(songs) {
+    // Queue and process downloads in batches to prevent network overload.
+    // Large playlists are split into batches of batchSize items.
+    isProcessingBatch.value = true
+    try {
+      const urls = songs.map(s => s.url)
+      
+      // Queue all songs
+      const queueRes = await API.queueBatchDownload(urls)
+
+      if (queueRes.status === 200) {
+        const { queued, failed, stats } = queueRes.data
+        console.log(`Queued ${queued.length} songs, ${failed.length} failed`, stats)
+        
+        if (failed.length > 0) {
+          notifyError('Some songs failed to queue', `${failed.length} songs could not be queued`)
+        }
+
+        // Process the batch
+        const processRes = await API.processBatchDownload()
+        if (processRes.status === 200) {
+          const { results, stats: finalStats } = processRes.data
+          console.log('Batch processing complete', results, finalStats)
+          
+          // Update UI with results
+          let completed = 0
+          let failed = 0
+          for (const [taskId, result] of Object.entries(results)) {
+            const song = songs.find(s => s.url === taskId)
+            if (!song) continue
+            
+            const downloadItem = progressTracker.getBySong(song)
+            if (result.status === 'completed') {
+              completed++
+              downloadItem.setWebURL(API.downloadFileURL(result.path))
+              downloadItem.setDownloaded()
+            } else {
+              failed++
+              downloadItem.setError(result.error_message)
+            }
+          }
+          
+          notifySuccess(
+            `Batch complete: ${completed} downloaded, ${failed} failed`,
+            `Out of ${songs.length} songs`
+          )
+        }
+      }
+    } catch (err) {
+      console.error('Batch download error:', err)
+      notifyError('Batch download failed', err.message)
+    } finally {
+      isProcessingBatch.value = false
+    }
+  }
+
+  async function processBatchDownload() {
+    // Process the current queue using the batch download API.
+    // This method processes all queued songs with rate limiting.
+    isProcessingBatch.value = true
+    try {
+      const processRes = await API.processBatchDownload()
+      
+      if (processRes.status === 200) {
+        const { results, stats } = processRes.data
+        console.log('Batch processing complete', results, stats)
+        
+        // Update UI with results
+        let completed = 0
+        let failed = 0
+        for (const [taskId, result] of Object.entries(results)) {
+          const song = downloadQueue.value.find(item => item.song.url === taskId)?.song
+          if (!song) continue
+          
+          const downloadItem = progressTracker.getBySong(song)
+          if (result.status === 'completed') {
+            completed++
+            downloadItem.setWebURL(API.downloadFileURL(result.path))
+            downloadItem.setDownloaded()
+          } else {
+            failed++
+            downloadItem.setError(result.error_message)
+          }
+        }
+        
+        if (failed > 0) {
+          notifyError(`${failed} songs failed to download`, 'Check queue for details')
+        } else {
+          notifySuccess(`All ${completed} songs downloaded!`, '')
+        }
+      }
+    } catch (err) {
+      console.error('Batch processing error:', err)
+      notifyError('Batch processing failed', err.message)
+    } finally {
+      isProcessingBatch.value = false
+    }
+  }
+
+  async function getBatchStatus() {
+    // Get current batch download status.
+    try {
+      const res = await API.getBatchStatus()
+      if (res.status === 200) {
+        return res.data
+      }
+    } catch (err) {
+      console.error('Error getting batch status:', err)
+    }
+    return null
+  }
+
+  async function clearBatch() {
+    // Clear all pending tasks from the batch queue.
+    try {
+      const res = await API.clearBatchQueue()
+      if (res.status === 200) {
+        console.log('Batch queue cleared')
+        notifySuccess('Queue cleared', 'All pending downloads have been removed')
+      }
+    } catch (err) {
+      console.error('Error clearing batch:', err)
+      notifyError('Failed to clear queue', err.message)
     }
   }
 
@@ -228,6 +367,12 @@ export function useDownloadManager() {
     queue,
     remove,
     downloadAll,
+    downloadBatch,
+    processBatchDownload,
+    getBatchStatus,
+    clearBatch,
     loading,
+    isProcessingBatch,
+    batchSize,
   }
 }

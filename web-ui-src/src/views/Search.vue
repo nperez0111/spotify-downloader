@@ -5,6 +5,7 @@
       :data="sm.results.value"
       :error="sm.error.value"
       @download="(song) => dm.queue(song)"
+      @downloadAll="(songs) => dm.downloadAll(songs)"
     />
   </div>
 </template>

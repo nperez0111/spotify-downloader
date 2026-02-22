@@ -23,12 +23,22 @@
         </div>
       </div>
     </div>
-    <div
-      v-else
-      v-for="(song, index) in props.data"
-      :key="index"
-      class="card md:card-side card-bordered my-2 shadow-lg card-compact bg-base-100"
-    >
+    <div v-else>
+      <div class="flex justify-end mb-4 mr-2">
+        <button
+          v-if="props.data && props.data.length > 0"
+          @click="downloadAll"
+          class="btn btn-success"
+        >
+          <Icon icon="clarity:download-line" class="h-5 w-5" />
+          Download All
+        </button>
+      </div>
+      <div
+        v-for="(song, index) in props.data"
+        :key="index"
+        class="card md:card-side card-bordered my-2 shadow-lg card-compact bg-base-100"
+      >
       <!-- {{ song }} -->
       <figure class="aspect-square md:max-h-fit">
         <img
@@ -86,6 +96,7 @@
           </button>
         </div>
       </div>
+      </div>
     </div>
   </div>
 </template>
@@ -99,7 +110,7 @@ import { useProgressTracker, useDownloadManager } from '../model/download'
 const props = defineProps(['data', 'error'])
 console.log('props', props)
 
-const emit = defineEmits(['download'])
+const emit = defineEmits(['download', 'downloadAll'])
 
 const sm = useSearchManager()
 const pt = useProgressTracker()
@@ -107,6 +118,10 @@ const dm = useDownloadManager()
 
 function download(song) {
   emit('download', song)
+}
+
+function downloadAll() {
+  emit('downloadAll', props.data)
 }
 </script>
 

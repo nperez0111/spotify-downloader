@@ -9,6 +9,20 @@ const error = ref(false)
 const errorValue = ref('')
 
 function useSearchManager() {
+  function deduplicateSongs(songs) {
+    if (!Array.isArray(songs)) {
+      return songs
+    }
+    const seen = new Set()
+    return songs.filter((song) => {
+      if (seen.has(song.song_id)) {
+        return false
+      }
+      seen.add(song.song_id)
+      return true
+    })
+  }
+
   function isValid(str) {
     return isValidSearch(str) || isValidURL(str)
   }
@@ -50,7 +64,8 @@ function useSearchManager() {
       .then((res) => {
         console.log('Received Search Data:', res.data)
         if (res.status === 200) {
-          results.value = res.data
+          results.value = deduplicateSongs(res.data)
+          console.log('Deduplicated Results:', results.value.length, 'unique songs')
           isSearching.value = false
         } else {
           console.error('Error Searching:', res)

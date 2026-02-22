@@ -158,11 +158,19 @@ export function useDownloadManager() {
     progressTracker.removeSong(song)
   }
 
+  function downloadAll(songs) {
+    console.log('Downloading all', songs.length, 'songs')
+    for (const song of songs) {
+      queue(song)
+    }
+  }
+
   return {
     fromURL,
     download,
     queue,
     remove,
+    downloadAll,
     loading,
   }
 }

@@ -489,13 +489,21 @@ async def download_file(
     # Try multiple possible paths for spotdl config directory
     # This handles both XDG standard (~/.config/spotdl) and alternative paths
     # Files should only be downloadable from web/sessions directories
+    # or from the output directory if web_use_output_dir is enabled
     possible_paths = [
         str((get_spotdl_path() / "web/sessions").absolute()),
         "/root/config/spotdl/web/sessions",  # Alternative path that's sometimes used
         str(Path("/root/config/spotdl/web/sessions").absolute()),
     ]
 
-    # Only allow downloads from web/sessions - these are temporary user download files
+    # If web_use_output_dir is enabled, also allow downloads from the output directory
+    if state.web_settings.get("web_use_output_dir", False):
+        output_dir = state.downloader_settings.get("output", "")
+        if output_dir:
+            possible_paths.append(str(Path(output_dir).absolute()))
+            possible_paths.append(output_dir)
+
+    # Only allow downloads from web/sessions or output directory
     # Check if file is in one of the allowed directories
     is_valid_path = any(file.startswith(path) for path in possible_paths)
 
